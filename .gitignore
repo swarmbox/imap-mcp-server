@@ -39,3 +39,9 @@ temp/
 # MCP Registry publisher OAuth tokens
 .mcpregistry_github_token
 .mcpregistry_registry_token
+
+# Local documentation (not tracked in this repo)
+docs/
+
+# Claude Code local settings
+.claude/settings.local.json

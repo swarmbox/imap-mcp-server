@@ -9,7 +9,8 @@ security rules, and conventions — lives in **@AGENTS.md**. Read it first.
 
 - This is an IMAP/SMTP **MCP server** (TypeScript, ESM). It uses **`imapflow`**
   for IMAP and **`nodemailer`** for SMTP. (It does **not** use `node-imap`.)
-- Credentials are stored AES-256 encrypted under `~/.imap-mcp/`; all tools
+- Credentials are stored AES-256 encrypted under `~/.imap-mcp/` by default, or
+  loaded from per-account files when `IMAP_ACCOUNTS_DIR` is set; all tools
   return JSON-formatted text.
 - When adding an IMAP/SMTP operation:
   1. Implement it in the relevant service (`ImapService` / `SmtpService`).

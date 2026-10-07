@@ -13,7 +13,10 @@ control**.
   **AES-256-CBC** in `~/.imap-mcp/accounts.json`. The encryption key is generated
   locally and kept at `~/.imap-mcp/.key`. The store directory and both files are
   written owner-only (`0700`/`0600`) so other local users cannot read them;
-  anyone who can read both files can read your credentials.
+  anyone who can read both files can read your credentials. The opt-in
+  per-account file store (`IMAP_ACCOUNTS_DIR`) is the exception: those files hold
+  **plaintext** credentials, must be mode 600, are only ever read by the server,
+  and are your responsibility to protect and keep out of version control.
 - **No telemetry.** The server collects no analytics, usage data, or crash
   reports.
 - **No third-party data sharing.** The only outbound network connections are to

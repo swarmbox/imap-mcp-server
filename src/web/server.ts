@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'url';
 import open from 'open';
 import { AccountManager } from '../services/account-manager.js';
 import { ImapService } from '../services/imap-service.js';
+import { exitOnAccountStoreConfigError } from '../services/account-file-store.js';
 import { emailProviders, getProviderByEmail } from '../providers/email-providers.js';
 import { ImapAccount } from '../types/index.js';
 
@@ -384,6 +385,10 @@ export class WebUIServer {
 // so the two could never match and `npm run web` exited silently (#136).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = parseInt(process.env.PORT || '3000');
-  const server = new WebUIServer(port);
-  server.start();
+  try {
+    const server = new WebUIServer(port);
+    server.start();
+  } catch (error) {
+    exitOnAccountStoreConfigError(error);
+  }
 }

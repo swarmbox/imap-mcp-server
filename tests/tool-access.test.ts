@@ -1,8 +1,9 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   registerTools,
   resolveEnabledTools,
   READ_ONLY_TOOLS,
+  STORE_MANAGED_TOOLS,
 } from '../src/tools/index.js';
 
 // Tool names that must NEVER appear in the read-only subset (they mutate
@@ -31,7 +32,10 @@ const DESTRUCTIVE_TOOLS = [
 ];
 
 /** Collect the tool names that `registerTools` actually registers under the given env. */
-function registeredToolsFor(env: Record<string, string | undefined>): string[] {
+function registeredToolsFor(
+  env: Record<string, string | undefined>,
+  accountManager: any = {}
+): string[] {
   const saved: Record<string, string | undefined> = {};
   for (const key of ['IMAP_MCP_ENABLED_TOOLS', 'IMAP_MCP_READ_ONLY']) {
     saved[key] = process.env[key];
@@ -43,7 +47,7 @@ function registeredToolsFor(env: Record<string, string | undefined>): string[] {
   const fakeServer = { registerTool: (name: string) => names.push(name) };
   const stub: any = {};
   try {
-    registerTools(fakeServer as any, stub, stub, stub, stub);
+    registerTools(fakeServer as any, stub, accountManager, stub, stub);
   } finally {
     for (const key of Object.keys(saved)) {
       if (saved[key] === undefined) delete process.env[key];
@@ -52,6 +56,15 @@ function registeredToolsFor(env: Record<string, string | undefined>): string[] {
   }
   return names;
 }
+
+// Store mode (IMAP_ACCOUNTS_DIR): the account manager reports isFileStore and
+// the account add/update/remove tools must not be registered.
+const STORE_MANAGED = ['imap_add_account', 'imap_update_account', 'imap_remove_account'];
+const storeStub = {
+  isFileStore: true,
+  accountsDir: '/tmp/store',
+  getAllAccounts: () => [{ id: 'acme' }],
+};
 
 describe('resolveEnabledTools', () => {
   it('returns null (all tools) when nothing is configured', () => {
@@ -165,5 +178,59 @@ describe('registerTools gating', () => {
       IMAP_MCP_ENABLED_TOOLS: 'imap_search_emails,imap_does_not_exist',
     });
     expect(names).toEqual(['imap_search_emails']);
+  });
+});
+
+describe('registerTools store mode', () => {
+  afterEach(() => {
+    delete process.env.IMAP_MCP_ENABLED_TOOLS;
+    delete process.env.IMAP_MCP_READ_ONLY;
+  });
+
+  it('tools-store-hides-mutators — store mode drops only the account add/update/remove tools', () => {
+    const legacy = registeredToolsFor({});
+    const names = registeredToolsFor({}, storeStub);
+
+    for (const tool of STORE_MANAGED) {
+      expect(names).not.toContain(tool);
+    }
+    expect(names).toContain('imap_list_accounts');
+    expect(new Set(names)).toEqual(
+      new Set(legacy.filter(n => !STORE_MANAGED.includes(n)))
+    );
+  });
+
+  it('tools-store-hides-even-if-enabled — store mode wins over IMAP_MCP_ENABLED_TOOLS', () => {
+    const names = registeredToolsFor(
+      { IMAP_MCP_ENABLED_TOOLS: 'imap_add_account,imap_list_accounts' },
+      storeStub
+    );
+    expect(names).toEqual(['imap_list_accounts']);
+  });
+
+  it('tools-legacy-unchanged — the empty stub still registers the account mutators', () => {
+    const names = registeredToolsFor({});
+    for (const tool of STORE_MANAGED) {
+      expect(names).toContain(tool);
+    }
+  });
+
+  it('exports STORE_MANAGED_TOOLS', () => {
+    expect([...STORE_MANAGED_TOOLS]).toEqual(STORE_MANAGED);
+  });
+
+  it('logs one store-mode line to stderr with identifiers only', () => {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((msg?: unknown) => {
+      lines.push(String(msg));
+    });
+    try {
+      registeredToolsFor({}, storeStub);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines).toEqual([
+      '[imap-mcp] Account store: 1 account(s) from /tmp/store (ids: acme); account add/update/remove tools disabled.',
+    ]);
   });
 });

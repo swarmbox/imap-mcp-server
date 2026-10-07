@@ -5,6 +5,7 @@ import { ImapService } from './services/imap-service.js';
 import { AccountManager } from './services/account-manager.js';
 import { SmtpService } from './services/smtp-service.js';
 import { SpamService } from './services/spam-service.js';
+import { exitOnAccountStoreConfigError } from './services/account-file-store.js';
 import { registerTools } from './tools/index.js';
 
 // Silence any package version output to stdout
@@ -25,7 +26,14 @@ const server = new McpServer({
 });
 
 const imapService = new ImapService();
-const accountManager = new AccountManager();
+
+// A bad IMAP_ACCOUNTS_DIR / IMAP_ACCOUNTS config exits 1 before the stdio handshake.
+let accountManager: AccountManager;
+try {
+  accountManager = new AccountManager();
+} catch (error) {
+  exitOnAccountStoreConfigError(error);
+}
 const smtpService = new SmtpService();
 const spamService = new SpamService();
 

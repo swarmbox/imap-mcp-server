@@ -13,8 +13,16 @@ working in this repository.
   - `ImapService` — IMAP protocol via **`imapflow`**, with connection pooling,
     folder operations, search, fetch, move/delete, append (Sent/Drafts).
   - `SmtpService` — outbound mail via **`nodemailer`**; composes raw MIME and sends.
-  - `AccountManager` — account CRUD with **AES-256-CBC** encrypted credential
+  - `AccountManager` — two modes. **Default:** account CRUD with **AES-256-CBC** encrypted credential
     storage at `~/.imap-mcp/accounts.json` (key at `~/.imap-mcp/.key`).
+    **Opt-in file store:** when `IMAP_ACCOUNTS_DIR` is set, `IMAP_ACCOUNTS`
+    (comma-separated slugs, required) allow-lists `imap-<slug>.json` files
+    loaded by `src/services/account-file-store.ts` (pure config resolver +
+    read-only loader; plaintext, mode 600, id = slug, hard-fails with
+    `AccountStoreConfigError`, which entry points report as one stderr line
+    and exit 1). In this mode add/update/remove throw `AccountStoreReadOnlyError`
+    and the three tools are hidden in `src/tools/index.ts`; the encrypted store
+    is never touched and env overrides still key by account name.
     Credentials can be overridden at read time via environment variables keyed
     by the account's normalized name (uppercase, non-alphanumeric → `_`):
     `IMAP_MCP_ACCOUNT_<NAME>_IMAP_USERNAME` / `_IMAP_PASSWORD` and
@@ -55,7 +63,7 @@ npm run setup        # launch the web setup wizard
 ```
 
 Always run `npm run build` **and** `npm test` before committing changes that
-touch `src/`. Keep the suite green (currently 396 tests).
+touch `src/`. Keep the suite green (currently 469 tests).
 
 > Note: `npm run lint` (`tsc --noEmit`) is memory-hungry on this project — the
 > MCP SDK's `registerTool` generics are deep enough to surface a pre-existing

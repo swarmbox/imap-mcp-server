@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Opt-in per-account file store (maintained in this fork). Set `IMAP_ACCOUNTS_DIR` (a leading `~/` expands to your home directory) and the required allow-list `IMAP_ACCOUNTS` (comma-separated slugs) to load accounts from `imap-<slug>.json` files instead of `~/.imap-mcp/accounts.json`. Files are plaintext, must be mode 600 on POSIX, and only allow-listed slugs are ever opened. The slug is the account id. Any configuration or file problem fails closed: one `[imap-mcp] Account store configuration error: ...` line on stderr and exit 1 before the MCP handshake, with messages that never include a value from a file. Store mode is read-only: `imap_add_account`, `imap_update_account` and `imap_remove_account` are hidden, and the setup wizard's add, edit and delete routes return 400. Environment credential overrides still work, keyed by account name. With `IMAP_ACCOUNTS_DIR` unset, nothing changes. Tests in `tests/`.
+
 ## [2.1.0] - 2026-09-26
 
 No tool was renamed, and no existing input or output shape changed. The new

@@ -5,24 +5,62 @@ import os from 'os';
 import crypto from 'crypto';
 import { ImapAccount } from '../types/index.js';
 import { ENV_CREDENTIAL_SUFFIXES, envVarName } from '../utils/env-credentials.js';
+import {
+  AccountStoreConfig,
+  AccountStoreReadOnlyError,
+  loadAccountFiles,
+  resolveAccountStoreConfig,
+} from './account-file-store.js';
 
 export class AccountManager {
   private configPath: string;
   private accounts: Map<string, ImapAccount> = new Map();
   private encryptionKey: string;
   private capturedEnvOverrides: Map<string, string> = new Map();
+  /** Legacy encrypted store, or the read-only per-account file store (`IMAP_ACCOUNTS_DIR`). */
+  private readonly store: AccountStoreConfig;
 
   private static readonly ENV_OVERRIDE_PATTERN =
     /^IMAP_MCP_ACCOUNT_.+_(?:IMAP|SMTP)_(?:USERNAME|PASSWORD)$/;
 
   constructor() {
     this.configPath = path.join(os.homedir(), '.imap-mcp', 'accounts.json');
-    this.encryptionKey = this.getOrCreateEncryptionKey();
-    this.captureEnvOverrides();
-    this.loadAccountsSync();
+    this.store = resolveAccountStoreConfig(); // AccountStoreConfigError propagates
+    if (this.store.kind === 'files') {
+      // Ephemeral key: only the in-memory env-override cache uses it, so store
+      // mode never reads or creates anything under ~/.imap-mcp/.
+      this.encryptionKey = crypto.randomBytes(32).toString('hex');
+      this.captureEnvOverrides();
+      // The only load in store mode; loadAccountsSync is a no-op from here on.
+      for (const account of loadAccountFiles(this.store.dir, this.store.slugs)) {
+        this.accounts.set(account.id, account);
+      }
+    } else {
+      this.encryptionKey = this.getOrCreateEncryptionKey();
+      this.captureEnvOverrides();
+      this.loadAccountsSync();
+    }
+  }
+
+  /** True when accounts come from `IMAP_ACCOUNTS_DIR` files and cannot be mutated. */
+  get isFileStore(): boolean {
+    return this.store.kind === 'files';
+  }
+
+  /** The per-account store directory in store mode; `undefined` in legacy mode. */
+  get accountsDir(): string | undefined {
+    return this.store.kind === 'files' ? this.store.dir : undefined;
+  }
+
+  /** Reject mutations while accounts are file-managed, before any map or disk change. */
+  private assertWritable(): void {
+    if (this.store.kind === 'files') {
+      throw new AccountStoreReadOnlyError(this.store.dir);
+    }
   }
 
   async addAccount(account: Omit<ImapAccount, 'id'>): Promise<ImapAccount> {
+    this.assertWritable();
     const id = crypto.randomUUID();
     const newAccount: ImapAccount = {
       ...account,
@@ -46,6 +84,7 @@ export class AccountManager {
 
 
   async removeAccount(id: string): Promise<void> {
+    this.assertWritable();
     if (!this.accounts.has(id)) {
       throw new Error(`Account ${id} not found`);
     }
@@ -55,6 +94,7 @@ export class AccountManager {
   }
 
   async updateAccount(id: string, updates: Partial<Omit<ImapAccount, 'id'>>): Promise<ImapAccount> {
+    this.assertWritable();
     const existingAccount = this.accounts.get(id);
     if (!existingAccount) {
       throw new Error(`Account with id ${id} not found`);
@@ -289,6 +329,9 @@ export class AccountManager {
   }
 
   private loadAccountsSync(): void {
+    // Store mode: the files loaded at startup are authoritative, so a stray
+    // ~/.imap-mcp/accounts.json can never replace them.
+    if (this.store.kind === 'files') return;
     try {
       const data = readFileSync(this.configPath, 'utf-8');
       const accounts = JSON.parse(data) as ImapAccount[];
@@ -385,6 +428,8 @@ export class AccountManager {
    * swallowed.
    */
   private decryptField(value: string | null | undefined): string {
+    // Store mode holds plaintext credentials read from the account files.
+    if (this.store.kind === 'files') return value ?? '';
     if (value === undefined || value === null || value === '') {
       return '';
     }

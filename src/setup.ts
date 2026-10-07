@@ -1,4 +1,5 @@
 import { WebUIServer } from './web/server.js';
+import { AccountStoreConfigError, exitOnAccountStoreConfigError } from './services/account-file-store.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { program } from 'commander';
@@ -145,6 +146,10 @@ async function main() {
     console.log('  4. Try: "List all my email accounts"');
     
   } catch (error) {
+    if (error instanceof AccountStoreConfigError) {
+      spinner.stop();
+      exitOnAccountStoreConfigError(error);
+    }
     spinner.fail('Failed to start web interface');
     console.error(chalk.red('Error:'), error);
     process.exit(1);

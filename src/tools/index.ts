@@ -39,6 +39,17 @@ export const READ_ONLY_TOOLS: readonly string[] = [
   'imap_list_spam_domains',
 ];
 
+/**
+ * Account-management tools that mutate stored accounts. In file-store mode
+ * (`IMAP_ACCOUNTS_DIR`) accounts are read-only and managed on disk, so these
+ * are never registered — even if `IMAP_MCP_ENABLED_TOOLS` lists them.
+ */
+export const STORE_MANAGED_TOOLS = [
+  'imap_add_account',
+  'imap_update_account',
+  'imap_remove_account',
+] as const;
+
 /** Normalize a configured tool name: lowercase and add the `imap_` prefix if missing. */
 function normalizeToolName(name: string): string {
   const trimmed = name.trim().toLowerCase();
@@ -87,8 +98,9 @@ export function resolveEnabledTools(
 }
 
 /**
- * Wrap an {@link McpServer} so that `registerTool` only registers tools whose
- * name is in `allowed`. All other server methods are forwarded unchanged.
+ * Wrap an {@link McpServer} so that `registerTool` only registers tools for
+ * which `isAllowed(name)` is true. All other server methods are forwarded
+ * unchanged.
  *
  * `seen` collects every tool name the registrars attempt to register, so the
  * caller can warn about configured names that don't match any real tool.
@@ -100,7 +112,7 @@ export function resolveEnabledTools(
  */
 function createFilteredServer(
   server: McpServer,
-  allowed: Set<string>,
+  isAllowed: (name: string) => boolean,
   seen: Set<string>,
   registered: string[]
 ): McpServer {
@@ -109,7 +121,7 @@ function createFilteredServer(
       if (prop === 'registerTool') {
         return (name: string, ...rest: unknown[]) => {
           seen.add(name);
-          if (!allowed.has(name)) {
+          if (!isAllowed(name)) {
             return undefined; // tool gated out — skip registration
           }
           registered.push(name);
@@ -131,15 +143,25 @@ export function registerTools(
   spamService: SpamService
 ): void {
   const enabled = resolveEnabledTools();
+  // A stub without `isFileStore` is treated as the legacy (writable) store.
+  const fileStore = accountManager.isFileStore === true;
 
-  // When `enabled` is null no restriction is configured, so the registrars get
-  // the raw server and every tool is registered (original behavior). Otherwise
-  // they get a filtering wrapper that drops tools outside the allowlist.
+  // When no restriction is configured and the store is writable, the registrars
+  // get the raw server and every tool is registered (original behavior).
+  // Otherwise they get a filtering wrapper. Store mode wins over the allowlist.
   const seen = new Set<string>();
   const registered: string[] = [];
-  const target = enabled
-    ? createFilteredServer(server, enabled, seen, registered)
-    : server;
+  const target =
+    enabled || fileStore
+      ? createFilteredServer(
+          server,
+          name =>
+            (enabled ? enabled.has(name) : true) &&
+            !(fileStore && (STORE_MANAGED_TOOLS as readonly string[]).includes(name)),
+          seen,
+          registered
+        )
+      : server;
 
   // Register account management tools
   accountTools(target, accountManager, imapService, smtpService);
@@ -152,6 +174,14 @@ export function registerTools(
 
   // Register spam detection and management tools
   spamTools(target, imapService, spamService);
+
+  if (fileStore) {
+    // Identifiers only — never credentials (security rule 1).
+    const ids = accountManager.getAllAccounts().map(a => a.id);
+    console.error(
+      `[imap-mcp] Account store: ${ids.length} account(s) from ${accountManager.accountsDir} (ids: ${ids.join(', ')}); account add/update/remove tools disabled.`
+    );
+  }
 
   if (enabled) {
     // Log to stderr only — stdout is the JSON-RPC channel.

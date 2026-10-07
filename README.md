@@ -63,7 +63,7 @@ npm run build
 
 ## Account Setup
 
-Accounts are stored encrypted in `~/.imap-mcp/accounts.json`. This file is **shared by all run modes** — whether you start the server via `npx`, a global install, or a local clone, they all read the same accounts. So you only need to set up your accounts once.
+By default, accounts are stored encrypted in `~/.imap-mcp/accounts.json`. This file is **shared by all run modes** — whether you start the server via `npx`, a global install, or a local clone, they all read the same accounts. So you only need to set up your accounts once. To manage accounts as plain files instead, see [Per-account file store](#per-account-file-store).
 
 ### Setting Up Accounts in npx Mode
 
@@ -75,7 +75,7 @@ If you run the server via `npx` (no clone), you have two ways to add accounts:
 npx -p imap-mcp-server imap-setup
 ```
 
-This launches the same web-based wizard described below and writes to `~/.imap-mcp/accounts.json`, which your `npx`-configured MCP server then picks up automatically.
+This launches the same web-based wizard described below and writes to the default `~/.imap-mcp/accounts.json` store, which your `npx`-configured MCP server then picks up automatically.
 
 **Option B — Add accounts straight from your AI client:**
 
@@ -160,6 +160,107 @@ store the credentials on the account via imap_update_account.
 
 Because the variables are read once at startup, setting one in an already-running
 shell has no effect until the server is restarted.
+
+### Per-account file store
+
+Opt in by setting `IMAP_ACCOUNTS_DIR`. The server then loads accounts from one
+JSON file per account instead of `~/.imap-mcp/accounts.json`, and treats them as
+**read-only**. Use it when something else (a secrets manager, a provisioning
+script, a dotfiles repo) owns your account definitions.
+
+| Variable | Meaning |
+| --- | --- |
+| `IMAP_ACCOUNTS_DIR` | Directory holding the files. A leading `~/` expands to your home directory. |
+| `IMAP_ACCOUNTS` | **Required** with `IMAP_ACCOUNTS_DIR`. Comma-separated account slugs to load, e.g. `work,other-co`. Whitespace is trimmed, empty entries dropped, duplicates removed. |
+
+For each slug the server reads `<IMAP_ACCOUNTS_DIR>/imap-<slug>.json`. The
+directory is never listed and files not named in `IMAP_ACCOUNTS` are never
+opened. The slug becomes the account id shown by `imap_list_accounts`; an `id`
+inside the file is ignored. Slugs are lowercase letters and digits joined by
+single hyphens (`^[a-z0-9]+(-[a-z0-9]+)*$`), e.g. `acme`, `other-co`.
+
+Example `imap-acme.json`:
+
+```json
+{
+  "name": "Acme",
+  "host": "imap.example.com",
+  "port": 993,
+  "user": "me@example.com",
+  "password": "REPLACE_ME",
+  "tls": true,
+  "email": "me@example.com",
+  "smtp": {
+    "host": "smtp.example.com",
+    "port": 465,
+    "secure": true
+  }
+}
+```
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `name` | yes | Non-empty string, unique across the loaded files |
+| `host` | yes | Non-empty string |
+| `port` | yes | Integer 1–65535 |
+| `user`, `password` | yes | Strings. Empty is allowed and marks the credential as environment-managed (see below) |
+| `tls` | yes | Boolean |
+| `smtp` | no | Object with string `host`, integer `port`, boolean `secure`; optional string `user` and `password` |
+| `email`, `loginMethod`, `authTimeout`, `connTimeout`, `keepalive`, `saveToSent`, `allowStartTLS`, `sentFolder`, `defaultBcc` | no | Passed through unchecked, same meaning as in `imap_add_account` |
+
+**Permissions.** On macOS and Linux each file must be mode 600 (no group or
+world access); run `chmod 600 ~/.api-keys/imap-acme.json`. Symlinks are
+followed, so a symlink to a 600 file is fine.
+
+**Fail closed.** Any problem aborts startup: the server prints one line to
+stderr, `[imap-mcp] Account store configuration error: <message>`, and exits 1
+before the MCP handshake. Messages name the slug, path, field or mode, never a
+value from a file. The MCP server honors `.env` for these variables; the setup
+wizard does not.
+
+| Condition | Message |
+| --- | --- |
+| `IMAP_ACCOUNTS` set, `IMAP_ACCOUNTS_DIR` unset | `IMAP_ACCOUNTS is set but IMAP_ACCOUNTS_DIR is not; the allow-list only applies to the per-account store` |
+| `IMAP_ACCOUNTS_DIR` set, `IMAP_ACCOUNTS` empty | `IMAP_ACCOUNTS_DIR is set, so IMAP_ACCOUNTS (comma-separated account slugs) is required` |
+| Bad slug | `invalid account slug "<slug>" in IMAP_ACCOUNTS (use lowercase letters, digits and single hyphens)` |
+| Missing file | `account "<slug>": file not found at <path>` |
+| Not a regular file | `account "<slug>": <path> is not a regular file` |
+| Unreadable file | `account "<slug>": cannot stat <path> (<code>)` or `cannot read <path> (<code>)` |
+| Mode too open | `account "<slug>": <path> must be mode 600 (is 644); run: chmod 600 <path>` |
+| Not JSON | `account "<slug>": invalid JSON in <path>` |
+| Not an object | `account "<slug>": <path> must contain a JSON object` |
+| Bad field | `account "<slug>": field "port" must be an integer from 1 to 65535 in <path>` (similar for each field above) |
+| Duplicate name | `accounts "<slug-a>" and "<slug-b>" share name; each account file needs a unique "name"` |
+
+**Read-only.** File edits take effect on restart; there is no hot reload.
+`imap_add_account`, `imap_update_account` and `imap_remove_account` are hidden
+from the tool list (even if `IMAP_MCP_ENABLED_TOOLS` names them), and the setup
+wizard's add, edit and delete routes return 400 with `Accounts are file-managed
+in <dir> (IMAP_ACCOUNTS_DIR). Edit imap-<slug>.json and restart the server.`
+Listing accounts and testing connections still work. A stray
+`~/.imap-mcp/accounts.json` is ignored in this mode. On startup the server logs
+one stderr line with the account ids only.
+
+**Environment overrides** still work and are keyed by the account `name`, not the
+slug (see below). Leave `user`/`password` empty in the file to keep credentials
+out of it entirely.
+
+Claude Desktop / Claude Code host config:
+
+```json
+{
+  "mcpServers": {
+    "imap": {
+      "command": "npx",
+      "args": ["-y", "imap-mcp-server"],
+      "env": {
+        "IMAP_ACCOUNTS_DIR": "~/.api-keys",
+        "IMAP_ACCOUNTS": "work"
+      }
+    }
+  }
+}
+```
 
 ### Supported Email Providers
 
@@ -657,7 +758,7 @@ Once configured, the IMAP MCP server provides the following tools in Claude:
 
 ## Security
 
-- Credentials are encrypted using AES-256-CBC encryption
+- Credentials are encrypted using AES-256-CBC encryption (default store)
 - Encryption keys are stored separately in `~/.imap-mcp/.key`
 - Account configurations are stored in `~/.imap-mcp/accounts.json`
 - The store directory, `.key`, and `accounts.json` are written owner-only
@@ -665,6 +766,7 @@ Once configured, the IMAP MCP server provides the following tools in Claude:
 - The web setup wizard's HTTP API never returns stored passwords to the browser
 - Downloaded attachments are confined to the downloads directory; sender-supplied
   filenames cannot write outside it
+- The opt-in per-account file store (`IMAP_ACCOUNTS_DIR`) is **plaintext**: files must be mode 600, are read-only to the server, and are never written or logged. Keep them out of version control
 - Never commit or share your encryption key or account configurations
 
 ## Development
